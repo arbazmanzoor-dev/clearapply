@@ -2,7 +2,7 @@
 
 A job application website built for blind people who use a screen reader.
 
-**Live site:** https://yourusername.github.io/clearapply
+**Live site:** https://arbazmanzoor-dev.github.io/clearapply/
 
 ## The problem
 
@@ -52,6 +52,6 @@ HTML, Tailwind CSS and JavaScript, designed with Google Stitch. The voice guide 
 
 Prototype for the Design Thinking course (Experiment 2: Human-Centred Design Process), Faculty of Engineering and Technology, JAIN (Deemed-to-be University), Bengaluru.
 
-Team: ______
+Team: 6
 
 The applicant, jobs and companies on the site are made up for the demo.
