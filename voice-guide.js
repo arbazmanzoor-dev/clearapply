@@ -3,16 +3,23 @@
    Uses the browser's built-in speech (Web Speech API). No server needed.
 
    Keys:  Tab / Shift+Tab  move and hear each item
-          Alt+R            repeat the instructions for this page
+          Alt+R            repeat the instructions for this screen
           Alt+V            turn the voice guide on or off
           Esc              stop talking
+
+   Browsers only let a page speak after the user presses a key or clicks on it.
+   A normal link loads a brand-new page and that permission is lost, so the
+   guide loads the next ClearApply screen inside the same page instead. The
+   new screen is then announced straight away.
 */
 (function () {
   'use strict';
-  var synth = window.speechSynthesis;
-  var page = (location.pathname.split('/').pop() || 'index.html').replace(/\?.*$/, '') || 'index.html';
+  if (window.__clearApplyVoice) return;
+  window.__clearApplyVoice = true;
 
-  /* ---------- What to say when each page opens ---------- */
+  var synth = window.speechSynthesis;
+
+  /* ---------- What to say when each screen opens ---------- */
   var KEYS = ' Press Tab to move to the next item and Shift Tab to go back. Press Alt R to hear these instructions again.';
   var INTRO = {
     'index.html': 'ClearApply prototype. This start page lists 9 screens in order. Press Tab to move through the list, and press Enter to open a screen. Start with screen 1, the typical job form.',
@@ -26,8 +33,14 @@
     'submitted.html': 'Success. Your application has been sent to BrightPath Tech. Your application number is B P 2 0 4 8 1. A confirmation has been sent to your email. Press Tab to hear what you can do next.',
     'before-vs-after.html': 'Before versus after. The left side shows what a screen reader says on a typical form: button, button, image. The right side shows what ClearApply says, where every button tells you what it does. Press Tab to move.'
   };
-  // On the "before" page the guide behaves like a plain screen reader: no hints.
-  var PLAIN = page === 'before.html';
+
+  function pageName(url) {
+    var p = new URL(url, location.href).pathname.split('/').pop();
+    return p || 'index.html';
+  }
+  var page = pageName(location.href);
+  var PLAIN = false;          // true on the "before" page: acts like a plain screen reader, no hints
+  var introDone = false;      // has this screen's intro been spoken?
 
   /* ---------- Settings (saved per browser; works without it) ---------- */
   function getOn() {
@@ -42,24 +55,41 @@
   function pickVoice() {
     if (!synth) return;
     var vs = synth.getVoices();
-    voice = vs.find(function (v) { return /en[-_]IN/i.test(v.lang); }) ||
-            vs.find(function (v) { return /^en[-_](GB|US)/i.test(v.lang); }) ||
-            vs.find(function (v) { return /^en/i.test(v.lang); }) || null;
+    function find(re, localOnly) {
+      return vs.find(function (v) { return re.test(v.lang) && (!localOnly || v.localService); });
+    }
+    // Voices installed on the device are preferred: Chrome's online voices can cut long sentences short.
+    voice = find(/en[-_]IN/i, true) || find(/^en[-_](GB|US)/i, true) || find(/^en/i, true) ||
+            find(/en[-_]IN/i) || find(/^en/i) || null;
   }
   if (synth) { pickVoice(); synth.onvoiceschanged = pickVoice; }
 
-  var introDone = false;
+  var live = [];  // keep utterances referenced so Chrome does not drop them mid-speech
+  function chunks(text) {
+    // Short pieces avoid a Chrome bug that stops long utterances after about 15 seconds.
+    var parts = text.match(/[^.!?]+[.!?]*\s*/g) || [text], out = [], cur = '';
+    parts.forEach(function (p) {
+      if ((cur + p).length > 180 && cur) { out.push(cur); cur = p; } else { cur += p; }
+    });
+    if (cur.trim()) out.push(cur);
+    return out;
+  }
   function say(text, opts) {
     opts = opts || {};
     if (!text) return;
-    showCaption(text);
+    showCaption(text, opts.queue);
     if (!on || !synth) return;
-    if (!opts.queue) synth.cancel();
-    var u = new SpeechSynthesisUtterance(text.replace(/_/g, ' underscore '));
-    if (voice) u.voice = voice;
-    u.lang = voice ? voice.lang : 'en-IN';
-    u.rate = 1;
-    synth.speak(u);
+    if (!opts.queue) { synth.cancel(); live = []; }
+    chunks(text.replace(/_/g, ' underscore ')).forEach(function (t) {
+      var u = new SpeechSynthesisUtterance(t);
+      if (voice) u.voice = voice;
+      u.lang = voice ? voice.lang : 'en-IN';
+      u.rate = 1;
+      u.onend = u.onerror = function () { var i = live.indexOf(u); if (i > -1) live.splice(i, 1); };
+      live.push(u);
+      synth.speak(u);
+    });
+    if (synth.paused) synth.resume();
   }
 
   /* ---------- Working out what an element is ---------- */
@@ -147,7 +177,7 @@
     return text;
   }
 
-  /* ---------- Events ---------- */
+  /* ---------- Focus, keys and the email check ---------- */
   var pending = null, focusValue = null, skipJump = false;
   document.addEventListener('focusin', function (e) {
     var el = e.target;
@@ -158,29 +188,31 @@
     var first = [];
     if (!introDone) { introDone = true; first.push(INTRO[page]); }
     if (pending) { first.push(pending); pending = null; }
-    if (first.length) { say(first[0]); for (var i = 1; i < first.length; i++) say(first[i], { queue: true }); say(describe(el), { queue: true }); return; }
+    if (first.length) {
+      say(first[0]);
+      for (var i = 1; i < first.length; i++) say(first[i], { queue: true });
+      say(describe(el), { queue: true });
+      return;
+    }
     say(describe(el));
   });
 
-  // Browsers only allow speech after the user does something on the page,
-  // so the page instructions start on the first key press or click.
   function firstAction(e) {
     if (introDone) return;
-    if (e.type === 'keydown' && (/^(Alt|Shift|Control|Meta)$/.test(e.key) || e.altKey)) return;
-    if (e.type === 'keydown' && e.key === 'Tab') return; // focusin handles Tab
+    if (e.type === 'keydown' && (/^(Alt|Shift|Control|Meta|Tab)$/.test(e.key) || e.altKey)) return;
     introDone = true;
     say(INTRO[page]);
   }
   document.addEventListener('keydown', firstAction, true);
   document.addEventListener('pointerdown', function (e) {
-    if (e.target.closest && e.target.closest('#vg-widget')) return;
+    if (e.target.closest && (e.target.closest('#vg-widget') || e.target.closest('a[href]'))) return;
     firstAction(e);
   }, true);
 
   document.addEventListener('keydown', function (e) {
     if (e.altKey && (e.code === 'KeyR' || e.key === 'r' || e.key === 'R')) { e.preventDefault(); introDone = true; say(INTRO[page]); }
     else if (e.altKey && (e.code === 'KeyV' || e.key === 'v' || e.key === 'V')) { e.preventDefault(); toggle(); }
-    else if (e.key === 'Escape' && synth) { synth.cancel(); }
+    else if (e.key === 'Escape' && synth) { synth.cancel(); live = []; }
   });
 
   // Email check on step 1: tell her when the mistake is fixed, or what is still wrong.
@@ -215,17 +247,16 @@
     '@media (max-width:640px){#vg-widget{padding-right:16px;flex-wrap:wrap}#vg-cap{flex-basis:100%}body{padding-bottom:120px!important}}' +
     '.vg-skip{position:absolute;left:16px;top:-80px;z-index:70;padding:10px 16px;border-radius:8px;background:#fec300;color:#071c36;font-weight:700;text-decoration:none}.vg-skip:focus{top:12px;outline:3px solid #071c36}main:focus{outline:none}' +
     '.vg-ok{border-color:#0d6832!important;background:#eaf7ee!important}.vg-ok label{color:#071c36!important}.vg-ok input[type=email]{border-color:#0d6832!important;background:#fff!important}';
-  var st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
+  var st = document.createElement('style'); st.id = 'vg-style'; st.textContent = css; document.head.appendChild(st);
 
   var w = document.createElement('div'); w.id = 'vg-widget';
   w.innerHTML = '<button id="vg-btn" type="button" aria-pressed="false"></button>' +
     '<div id="vg-cap" aria-hidden="true" hidden><b>SAYING:</b><span></span></div>';
-  document.body.appendChild(w);
   var btn = w.querySelector('#vg-btn'), cap = w.querySelector('#vg-cap'), capText = cap.querySelector('span');
 
-  function showCaption(t) {
+  function showCaption(t, add) {
     if (!on) return;
-    capText.textContent = t;
+    capText.textContent = add && capText.textContent ? capText.textContent + ' ' + t : t;
     cap.hidden = false;
   }
   function render() {
@@ -243,9 +274,8 @@
   }
   btn.addEventListener('click', toggle);
 
-  // The welcome page's "Audio guide" switch controls the same setting.
-  var sw = document.getElementById('audio-toggle-btn');
   function syncWelcomeSwitch() {
+    var sw = document.getElementById('audio-toggle-btn');
     if (!sw) return;
     sw.setAttribute('aria-checked', on ? 'true' : 'false');
     var spans = sw.querySelectorAll('span');
@@ -253,20 +283,94 @@
     var state = sw.parentElement && sw.parentElement.querySelector('span.inline-block');
     if (state) state.textContent = on ? 'State: ON • Voice guide reads each step aloud' : 'State: OFF';
   }
-  if (sw) sw.addEventListener('click', function () { toggle(); });
 
-  // "Skip to main content" link, so keyboard users do not have to Tab through the menu on every page.
-  var hasSkip = Array.prototype.some.call(document.querySelectorAll('a'), function (a) { return /^skip/i.test(clean(a.textContent)); });
-  var main = document.querySelector('main');
-  if (!PLAIN && !hasSkip && main) {
-    if (!main.id) main.id = 'main-content';
-    main.setAttribute('tabindex', '-1');
-    var sk = document.createElement('a');
-    sk.href = '#' + main.id; sk.className = 'vg-skip'; sk.textContent = 'Skip to main content';
-    sk.addEventListener('click', function () { skipJump = true; });
-    document.body.insertBefore(sk, document.body.firstChild);
+  /* ---------- Per-screen setup (runs on first load and after every screen change) ---------- */
+  function setupScreen() {
+    PLAIN = page === 'before.html';
+    introDone = false;
+    pending = null;
+    document.body.appendChild(w);
+
+    // The welcome page's "Audio guide" switch controls the same setting.
+    var sw = document.getElementById('audio-toggle-btn');
+    if (sw && !sw.__vg) { sw.__vg = true; sw.addEventListener('click', function () { toggle(); }); }
+
+    // "Skip to main content" link, so keyboard users do not Tab through the menu on every screen.
+    var hasSkip = Array.prototype.some.call(document.querySelectorAll('a'), function (a) { return /^skip/i.test(clean(a.textContent)); });
+    var main = document.querySelector('main');
+    if (!PLAIN && !hasSkip && main) {
+      if (!main.id) main.id = 'main-content';
+      main.setAttribute('tabindex', '-1');
+      var sk = document.createElement('a');
+      sk.href = '#' + main.id; sk.className = 'vg-skip'; sk.textContent = 'Skip to main content';
+      sk.addEventListener('click', function () { skipJump = true; });
+      document.body.insertBefore(sk, document.body.firstChild);
+    }
+    render();
+    if (!synth) { btn.textContent = 'Voice guide not supported in this browser'; btn.disabled = true; }
   }
 
-  render();
-  if (!synth) { btn.textContent = 'Voice guide not supported in this browser'; btn.disabled = true; }
+  /* ---------- Changing screens without losing the permission to speak ---------- */
+  function isScreenLink(a) {
+    if (!a || !a.getAttribute('href')) return false;
+    var href = a.getAttribute('href');
+    if (/^(#|mailto:|tel:|javascript:)/i.test(href) || a.target === '_blank' || a.hasAttribute('download')) return false;
+    var u = new URL(href, location.href);
+    if (u.origin !== location.origin) return false;
+    var here = location.pathname.replace(/[^/]*$/, ''), there = u.pathname.replace(/[^/]*$/, '');
+    return here === there && Object.prototype.hasOwnProperty.call(INTRO, pageName(u.href));
+  }
+
+  function runScripts(root) {
+    root.querySelectorAll('script').forEach(function (old) {
+      if (old.src) { old.remove(); return; }  // shared scripts (this file, Tailwind) are already loaded
+      var s = document.createElement('script');
+      s.textContent = old.textContent;
+      old.replaceWith(s);
+    });
+  }
+
+  var loading = false;
+  function goTo(url, push) {
+    if (loading) return;
+    loading = true;
+    fetch(url, { credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        if (!doc.body) throw new Error('no body');
+        // add any stylesheet the next screen needs that this one has not loaded
+        doc.head.querySelectorAll('link[rel="stylesheet"]').forEach(function (l) {
+          if (!document.head.querySelector('link[href="' + l.getAttribute('href') + '"]')) document.head.appendChild(l.cloneNode(true));
+        });
+        document.title = doc.title;
+        document.body.className = doc.body.className;
+        document.body.innerHTML = doc.body.innerHTML;
+        if (push) history.pushState({ vg: true }, '', url);
+        page = pageName(url);
+        window.scrollTo(0, 0);
+        runScripts(document.body);
+        try { document.dispatchEvent(new Event('DOMContentLoaded')); } catch (e) {}
+        setupScreen();
+        var hash = new URL(url, location.href).hash;
+        if (hash && document.querySelector(hash)) document.querySelector(hash).scrollIntoView();
+        introDone = true;
+        say(INTRO[page]);   // the click or key press that opened this screen still counts, so this is allowed
+        loading = false;
+      })
+      .catch(function () { loading = false; location.href = url; });  // e.g. opened from a file: fall back to a normal page load
+  }
+
+  document.addEventListener('click', function (e) {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var a = e.target.closest && e.target.closest('a[href]');
+    if (!isScreenLink(a)) return;
+    e.preventDefault();
+    if (synth) { synth.cancel(); live = []; }
+    goTo(a.href, true);
+  });
+  window.addEventListener('popstate', function () { goTo(location.href, false); });
+  if (history.replaceState) history.replaceState({ vg: true }, '', location.href);
+
+  setupScreen();
 })();
