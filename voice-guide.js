@@ -22,7 +22,9 @@
   /* ---------- What to say when each screen opens ---------- */
   var KEYS = ' Press Tab to move to the next item and Shift Tab to go back. Press Alt R to hear these instructions again.';
   var INTRO = {
-    'index.html': 'ClearApply prototype. This start page lists 9 screens in order. Press Tab to move through the list, and press Enter to open a screen. Start with screen 1, the typical job form.',
+    'index.html': 'ClearApply home. Job applications that talk you through every step. There is 1 open job: Junior Web Developer at BrightPath Tech. To apply, move to View job and apply and press Enter.' + KEYS,
+    'index.html#jobs': 'Open jobs. There is 1 open job: Junior Web Developer at BrightPath Tech, in Bengaluru, hybrid, full-time. To apply, move to View job and apply and press Enter. 2 more jobs open next month.' + KEYS,
+    'about.html': 'About this project. ClearApply is a Design Thinking prototype that redesigns an online job application for blind people who use a screen reader. This page explains the problem and links to a typical job form and a before versus after comparison.' + KEYS,
     'before.html': 'Before. This is a typical job application form, with the voice guide acting like a normal screen reader. Most buttons here have no labels, so you will only hear the word button. Try pressing Tab and notice that you cannot tell what anything does.',
     'welcome.html': 'Apply for Junior Web Developer at BrightPath Tech. This application has 5 short steps and takes about 10 minutes. Your progress is saved as you go. When you are ready, move to the Start application button and press Enter.' + KEYS,
     'step-1-contact.html': 'Step 1 of 5: Contact details. There are 3 fields: full name, email address and phone number. The email address has a mistake that needs fixing. When you are done, move to Continue to step 2 and press Enter.' + KEYS,
@@ -39,6 +41,7 @@
     return p || 'index.html';
   }
   var page = pageName(location.href);
+  function intro() { return (location.hash === '#jobs' && INTRO['index.html#jobs'] && page === 'index.html') ? INTRO['index.html#jobs'] : INTRO[page]; }
   var PLAIN = false;          // true on the "before" page: acts like a plain screen reader, no hints
   var introDone = false;      // has this screen's intro been spoken?
 
@@ -140,7 +143,7 @@
     if (role === 'link') {
       var h = el.getAttribute('href') || '';
       if (/^skip/i.test(nameOf(el))) return 'Press Enter to jump past the menu.';
-      if (h === 'index.html') return 'Press Enter to go to the list of all screens.';
+      if (h === 'index.html') return 'Press Enter to go to the home page.';
       if (h && h.charAt(0) !== '#') return 'Press Enter to open it.';
       return 'Press Enter to activate it.';
     }
@@ -186,7 +189,7 @@
     skipJump = false;
     focusValue = el.value;
     var first = [];
-    if (!introDone) { introDone = true; first.push(INTRO[page]); }
+    if (!introDone) { introDone = true; first.push(intro()); }
     if (pending) { first.push(pending); pending = null; }
     if (first.length) {
       say(first[0]);
@@ -201,7 +204,7 @@
     if (introDone) return;
     if (e.type === 'keydown' && (/^(Alt|Shift|Control|Meta|Tab)$/.test(e.key) || e.altKey)) return;
     introDone = true;
-    say(INTRO[page]);
+    say(intro());
   }
   document.addEventListener('keydown', firstAction, true);
   document.addEventListener('pointerdown', function (e) {
@@ -210,7 +213,7 @@
   }, true);
 
   document.addEventListener('keydown', function (e) {
-    if (e.altKey && (e.code === 'KeyR' || e.key === 'r' || e.key === 'R')) { e.preventDefault(); introDone = true; say(INTRO[page]); }
+    if (e.altKey && (e.code === 'KeyR' || e.key === 'r' || e.key === 'R')) { e.preventDefault(); introDone = true; say(intro()); }
     else if (e.altKey && (e.code === 'KeyV' || e.key === 'v' || e.key === 'V')) { e.preventDefault(); toggle(); }
     else if (e.key === 'Escape' && synth) { synth.cancel(); live = []; }
   });
@@ -270,7 +273,7 @@
     if (on) { say('Voice guide off.'); }
     on = !on; setOn(on);
     render();
-    if (on) { introDone = true; say('Voice guide on. ' + INTRO[page]); }
+    if (on) { introDone = true; say('Voice guide on. ' + intro()); }
   }
   btn.addEventListener('click', toggle);
 
@@ -283,6 +286,30 @@
     var state = sw.parentElement && sw.parentElement.querySelector('span.inline-block');
     if (state) state.textContent = on ? 'State: ON • Voice guide reads each step aloud' : 'State: OFF';
   }
+
+  /* ---------- Buttons that act like a real site ---------- */
+  var SIZES = [1, 1.15, 1.3, 1.5], sizeIx = 0;
+  try { sizeIx = Math.max(0, SIZES.indexOf(parseFloat(localStorage.getItem('clearapply-size')))); } catch (e) {}
+  function applySize() {
+    var m = document.querySelector('main'); if (m) m.style.zoom = SIZES[sizeIx] === 1 ? '' : SIZES[sizeIx];
+    try { localStorage.setItem('clearapply-size', SIZES[sizeIx]); } catch (e) {}
+  }
+  var HELP = 'Keyboard help. Press Tab to move to the next item and Shift Tab to go back. Press Enter to press a button or open a link. Press Space to turn a switch on or off. Press Alt R to hear the instructions for this page again, Alt V to turn the voice guide on or off, and Escape to stop it talking.';
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('button');
+    if (!b) return;
+    var n = (b.getAttribute('aria-label') || visibleText(b)).toLowerCase();
+    if (/increase font size/.test(n)) { sizeIx = Math.min(SIZES.length - 1, sizeIx + 1); applySize(); say('Text size ' + Math.round(SIZES[sizeIx] * 100) + ' percent.'); }
+    else if (/decrease font size/.test(n)) { sizeIx = Math.max(0, sizeIx - 1); applySize(); say('Text size ' + Math.round(SIZES[sizeIx] * 100) + ' percent.'); }
+    else if (/^help/.test(n)) { say(HELP); }
+    else if (/save (progress|draft)|save & continue|save application progress/.test(n)) { say('Your progress is saved. You can come back and finish later.'); }
+  });
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (el && el.type === 'file' && el.files && el.files[0]) {
+      say('Resume uploaded: ' + el.files[0].name + '. Press Tab to move to the next item.', { queue: true });
+    }
+  });
 
   /* ---------- Per-screen setup (runs on first load and after every screen change) ---------- */
   function setupScreen() {
@@ -306,6 +333,7 @@
       sk.addEventListener('click', function () { skipJump = true; });
       document.body.insertBefore(sk, document.body.firstChild);
     }
+    applySize();
     render();
     if (!synth) { btn.textContent = 'Voice guide not supported in this browser'; btn.disabled = true; }
   }
@@ -347,6 +375,7 @@
         document.body.className = doc.body.className;
         document.body.innerHTML = doc.body.innerHTML;
         if (push) history.pushState({ vg: true }, '', url);
+        shownPath = new URL(url, location.href).pathname;
         page = pageName(url);
         window.scrollTo(0, 0);
         runScripts(document.body);
@@ -355,7 +384,7 @@
         var hash = new URL(url, location.href).hash;
         if (hash && document.querySelector(hash)) document.querySelector(hash).scrollIntoView();
         introDone = true;
-        say(INTRO[page]);   // the click or key press that opened this screen still counts, so this is allowed
+        say(intro());   // the click or key press that opened this screen still counts, so this is allowed
         loading = false;
       })
       .catch(function () { loading = false; location.href = url; });  // e.g. opened from a file: fall back to a normal page load
@@ -369,7 +398,12 @@
     if (synth) { synth.cancel(); live = []; }
     goTo(a.href, true);
   });
-  window.addEventListener('popstate', function () { goTo(location.href, false); });
+  window.addEventListener('hashchange', function () { if (location.hash === '#jobs') { introDone = true; say(intro()); } });
+  var shownPath = location.pathname;
+  window.addEventListener('popstate', function () {
+    if (location.pathname === shownPath) return;   // only the #part changed: same screen, nothing to load
+    goTo(location.href, false);
+  });
   if (history.replaceState) history.replaceState({ vg: true }, '', location.href);
 
   setupScreen();
